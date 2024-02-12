@@ -1,0 +1,383 @@
+import streamlit as st
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances_argmin_min
+from data_loader import load_data
+from plotly_chart import plotly_scatter_chart
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import StandardScaler
+import uuid
+
+
+dataset_key = str(uuid.uuid4())
+tabs_key = str(uuid.uuid4())
+slider_key = str(uuid.uuid4())
+slider_key2 = str(uuid.uuid4())
+
+dataset = st.sidebar.radio("Choose Dataset", ["SLB Data", "Relocated Data"])
+tabs = st.sidebar.radio("Choose Visualization", ["Line Chart", "Bar Chart", "Scatter Plot", "Custom Plotly Scatter Chart"])
+k_clusters = st.sidebar.slider("Select Number of Clusters", min_value=2, max_value=20, value=8)
+
+def generate_date_input_key(tab_name, date_type):
+    return f"date_input_{tab_name}_{date_type}"
+
+def get_date_input(tab_name):
+    start_date_kmeans = st.date_input('Start Date K-Means', pd.to_datetime('01/01/2011', format='%d/%m/%Y'), key=generate_date_input_key(tab_name, "start"))
+    end_date_kmeans = st.date_input('End Date K-Means', pd.to_datetime('31/12/2018', format='%d/%m/%Y'), key=generate_date_input_key(tab_name, "end"))
+    return start_date_kmeans, end_date_kmeans
+
+def load_slb_data_with_date_range(start_date, end_date):
+    start_date = pd.Timestamp(start_date)
+    end_date = pd.Timestamp(end_date)
+
+    slb_data = load_data("SLB Data", start_date, end_date)
+    return slb_data
+
+def load_relocated_data_with_date_range(start_date, end_date):
+    start_date = pd.Timestamp(start_date)
+    end_date = pd.Timestamp(end_date)
+
+    relocated_data = load_data("Relocated Data", start_date, end_date)
+    return relocated_data
+
+def data_visualization_page():
+    st.title('Data Visualization')
+    
+    start_date_viz = st.date_input('Start Date Visualization', pd.to_datetime('01/01/2011', format='%d/%m/%Y'))
+    end_date_viz = st.date_input('End Date Visualization', pd.to_datetime('31/12/2018', format='%d/%m/%Y'))
+
+    start_date = pd.Timestamp(start_date_viz)
+    end_date = pd.Timestamp(end_date_viz)
+
+    data = load_data(dataset, start_date, end_date)
+
+    origin_time_col = "SLB origin time" if dataset == "SLB Data" else "Relocated origin time"
+    depth_difference_col = "SLB Depth Difference" if dataset == "SLB Data" else "Relocated Depth Difference"
+
+    if tabs == "Line Chart":
+        st.line_chart(data.set_index(origin_time_col)[depth_difference_col])
+
+    elif tabs == "Bar Chart":
+        st.bar_chart(data.set_index(origin_time_col)[depth_difference_col])
+
+    elif tabs == "Scatter Plot":
+        st.scatter_chart(data.set_index(origin_time_col)[depth_difference_col])
+
+    elif tabs == "Custom Plotly Scatter Chart":
+        st.plotly_chart(plotly_scatter_chart(data, origin_time_col, depth_difference_col, 'Year/Mo. Category'))
+
+def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Difference', 'SLB Horizontal Difference']):
+    slb_data['Year/Mo. Category'] = slb_data['Year/Mo. Category'].astype(str)
+
+    data_for_clustering = slb_data[features].dropna()
+
+    kmeans = KMeans(n_clusters=k_clusters, random_state=42)
+    slb_data['cluster'] = kmeans.fit_predict(data_for_clustering)
+
+    # custom_colors = ['#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#00FFFF', '#FF00FF', '#800000', '#008000', '#000080', '#808000',
+    #              '#800080', '#008080', '#C0C0C0', '#808080', '#FFA500', '#FF4500', '#A52A2A', '#800000', '#000000', '#FFFFFF'][:k_clusters]
+
+    # we generate a palette of 20 distinct colors since the max range is 20
+    palette = sns.color_palette("hsv", 20)
+    custom_colors = [sns.color_palette(palette).as_hex()[i] for i in range(20)][:k_clusters]
+
+    fig = go.Figure()
+
+    for cluster_id in range(k_clusters):
+        cluster_data = slb_data[slb_data['cluster'] == cluster_id]
+        fig.add_trace(go.Scatter(x=cluster_data['SLB Horizontal Difference'],
+                                 y=cluster_data['SLB Depth Difference'],
+                                 mode='markers',
+                                 marker=dict(color=custom_colors[cluster_id]),
+                                 name=f'Cluster {cluster_id}'))
+
+    fig.update_layout(title='K-Means Clustering of SLB Data',
+                      xaxis_title='SLB Horizontal Difference',
+                      yaxis_title='SLB Depth Difference')
+
+    st.plotly_chart(fig)
+    
+    cluster_formats = slb_data.groupby('cluster')['Year/Mo. Category'].unique()
+    for cluster_id, formats_in_cluster in cluster_formats.items():
+        st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
+
+def kmeans_clustering_page(start_date, end_date, tab_name, k_clusters):  
+    st.title('K-Means Clustering')
+
+    st.write("Performing K-Means Clustering on SLB Data...")
+    slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
+    
+    perform_kmeans_clustering(slb_data_for_clustering, k_clusters=k_clusters)
+
+    return slb_data_for_clustering
+
+def kmeans_by_total_variation(slb_data, k_clusters, features=['SLB Depth Difference', 'SLB Horizontal Difference'], k_values=range(1, 21)):
+    slb_cluster_data = slb_data[features]
+
+    scaler = StandardScaler()
+    slb_cluster_data_scaled = scaler.fit_transform(slb_cluster_data)
+
+    def calculate_total_variation(data, k_values):
+        total_variation = []
+        for k in k_values:
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            kmeans.fit(data)
+            total_variation.append(sum(np.min(pairwise_distances_argmin_min(data, kmeans.cluster_centers_, metric='euclidean'), axis=1)))
+        return total_variation
+
+    total_variation_values = calculate_total_variation(slb_cluster_data_scaled, k_values)
+
+    st.write("### Elbow Curve for Total Variation")
+    st.line_chart(pd.DataFrame({"k": k_values, "Total Variation": total_variation_values}).set_index("k"))
+
+    optimal_k = np.argmin(np.diff(total_variation_values)) + 1
+    st.write(f'Optimal number of clusters (k): {optimal_k}')
+
+    kmeans = KMeans(n_clusters=optimal_k, random_state=42)
+    slb_data['Cluster'] = kmeans.fit_predict(slb_cluster_data_scaled)
+
+    cluster_centers = pd.DataFrame(scaler.inverse_transform(kmeans.cluster_centers_), columns=features)
+    cluster_centers['Cluster'] = cluster_centers.index + 1
+    st.write('\nCluster Centers:')
+    st.write(cluster_centers)
+
+    slb_data['Nearest Cluster Center'] = pairwise_distances_argmin_min(slb_cluster_data_scaled, kmeans.cluster_centers_)[0] + 1
+
+    st.write('\nUpdated SLB Data with Clusters:')
+    st.write(slb_data[['SLB origin time', 'SLB Depth Difference', 'Cluster', 'Nearest Cluster Center']].head())
+
+def kmeans_by_wcss(slb_data_for_clustering, features=['SLB Depth Difference', 'SLB Horizontal Difference'], k_values=range(1, 11)):
+    slb_cluster_data = slb_data_for_clustering[features]
+
+    scaler = StandardScaler()
+    slb_cluster_data_scaled = scaler.fit_transform(slb_cluster_data)
+
+    def calculate_wcss(data, k_values):
+        wcss = []
+        for k in k_values:
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            kmeans.fit(data)
+            wcss.append(kmeans.inertia_)
+        return wcss
+
+    wcss_values = calculate_wcss(slb_cluster_data_scaled, k_values)
+
+    st.write("### Elbow Curve for WCSS")
+    st.line_chart(pd.DataFrame({"k": k_values, "WCSS": wcss_values}).set_index("k"))
+
+    optimal_k = np.argmin(np.diff(wcss_values)) + 1
+    st.write(f'Optimal number of clusters (k): {optimal_k}')
+
+    kmeans = KMeans(n_clusters=optimal_k, random_state=42)
+    slb_data_for_clustering['Cluster'] = kmeans.fit_predict(slb_cluster_data_scaled)
+
+    cluster_centers = scaler.inverse_transform(kmeans.cluster_centers_)
+    cluster_centers_df = pd.DataFrame(cluster_centers, columns=features)
+    cluster_centers_df['Cluster'] = cluster_centers_df.index + 1
+    st.write('\nCluster Centers:')
+    st.write(cluster_centers_df)
+
+    slb_data_for_clustering['Nearest Cluster Center'] = pairwise_distances_argmin_min(slb_cluster_data_scaled, kmeans.cluster_centers_)[0] + 1
+
+    st.write('\nUpdated SLB Data with Clusters:')
+    st.write(slb_data_for_clustering[['SLB Horizontal Difference', 'SLB Depth Difference', 'Cluster', 'Nearest Cluster Center']].head())
+
+def custom_kmeans_clustering(slb_data, k_clusters, features=['SLB Depth Difference', 'SLB origin time']):
+    scaler = StandardScaler()
+
+    slb_data['SLB origin time'] = pd.to_datetime(slb_data['SLB origin time'])
+    slb_data['Timestamp'] = slb_data['SLB origin time'].astype(np.int64) // 10**9
+
+    timestamp_feature = slb_data['Timestamp']
+    slb_data_without_timestamp = slb_data.drop(columns=['SLB origin time', 'Timestamp'])
+
+    scaled_features = scaler.fit_transform(slb_data_without_timestamp[features[:-1]])
+
+    scaled_features_with_timestamp = np.column_stack((scaled_features, timestamp_feature))
+
+    kmeans = KMeans(n_clusters=k_clusters, random_state=42)
+    slb_data['Cluster'] = kmeans.fit_predict(scaled_features_with_timestamp)
+
+    return slb_data
+
+def plot_normalized_time_clustering(slb_data, k_clusters):
+    fig = go.Figure()
+
+    for cluster_id in range(k_clusters):
+        cluster_data = slb_data[slb_data['Cluster'] == cluster_id]
+        fig.add_trace(go.Scatter(x=[cluster_id] * len(cluster_data), 
+                                 y=cluster_data['SLB origin time'], 
+                                 mode='markers', name=f'Cluster {cluster_id}',
+                                 text=cluster_data['Year/Mo. Category'],  
+                                 hoverinfo='text'))
+
+    fig.update_layout(xaxis_title='Cluster', yaxis_title='SLB Origin Time', title='Normalized Time Clustering Results')
+    st.plotly_chart(fig)
+    
+    cluster_formats = slb_data.groupby('Cluster')['Year/Mo. Category'].unique()
+    for cluster_id, formats_in_cluster in cluster_formats.items():
+        st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
+
+def plot_time_depth_clustering(slb_data, k_clusters):
+    slb_data['SLB origin time'] = pd.to_datetime(slb_data['SLB origin time'])
+    slb_data['TimeInSeconds'] = (slb_data['SLB origin time'] - slb_data['SLB origin time'].min()).dt.total_seconds() + 1
+    features = ['TimeInSeconds', 'SLB Horizontal Difference', 'SLB Depth Difference']
+    kmeans = KMeans(n_clusters=k_clusters, random_state=42)
+    slb_data['Cluster'] = kmeans.fit_predict(slb_data[features])
+
+    fig = go.Figure()
+
+    for cluster_id in range(k_clusters):
+        cluster_data = slb_data[slb_data['Cluster'] == cluster_id]
+        fig.add_trace(go.Scatter(x=cluster_data['TimeInSeconds'], y=cluster_data['SLB Depth Difference'],
+                                mode='markers', name=f'Cluster {cluster_id}',
+                                text=cluster_data['Year/Mo. Category'],  
+                                hoverinfo='text')) 
+    
+    fig.update_layout(title='K-Means Clustering of SLB Data based on Time and Depth Difference',
+                    xaxis_title='Time (Seconds)', yaxis_title='SLB Depth Difference',
+                    legend_title='Cluster', showlegend=True,
+                    height=600, width=900)
+
+    st.plotly_chart(fig)
+    
+    cluster_formats = slb_data.groupby('Cluster')['Year/Mo. Category'].unique()
+    for cluster_id, formats_in_cluster in cluster_formats.items():
+        st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
+
+def plot_depth_normalized_time_clustering(slb_data, k_clusters):
+    fig = go.Figure()
+    features = ['SLB Depth Difference', 'Normalized Time']
+    kmeans = KMeans(n_clusters=k_clusters, random_state=42)
+    slb_data['Cluster'] = kmeans.fit_predict(slb_data[features])
+
+    for cluster_id in range(k_clusters):
+        cluster_data = slb_data[slb_data['Cluster'] == cluster_id]
+        fig.add_trace(go.Scatter(x=cluster_data['SLB Depth Difference'], y=cluster_data['Normalized Time'], 
+                                 mode='markers', name=f'Cluster {cluster_id}',
+                                 text=cluster_data['Year/Mo. Category'],  
+                                 hoverinfo='text'))
+
+    fig.update_layout(title='K-Means Clustering of SLB Data',
+                      xaxis_title='SLB Depth Difference', yaxis_title='Normalized Time')
+    st.plotly_chart(fig)
+    
+    cluster_formats = slb_data.groupby('Cluster')['Year/Mo. Category'].unique()
+    for cluster_id, formats_in_cluster in cluster_formats.items():
+        st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
+
+def normalized_kmeansby_totalVariation(slb_data, k_clusters):
+
+    slb_data['Normalized Time'] = (slb_data['SLB origin time'] - slb_data['SLB origin time'].min()) / (slb_data['SLB origin time'].max() - slb_data['SLB origin time'].min())
+    features = ['Normalized Time', 'SLB Depth Difference']
+
+    scaler = StandardScaler()
+    slb_cluster_data_scaled = scaler.fit_transform(slb_data[features])
+
+    def calculate_total_variation(data, k_values):
+        total_variation = []
+        for k in k_values:
+            kmeans = KMeans(n_clusters=k, random_state=42)
+            kmeans.fit(data)
+            total_variation.append(sum(np.min(pairwise_distances_argmin_min(data, kmeans.cluster_centers_, metric='euclidean'), axis=1)))
+        return total_variation
+
+    k_values = range(1, 21)
+    total_variation_values = calculate_total_variation(slb_cluster_data_scaled, k_values)
+
+    st.write("### Elbow Curve for Total Variation")
+    st.line_chart(pd.DataFrame({"k": k_values, "Total Variation": total_variation_values}).set_index("k"))
+
+    optimal_k = np.argmin(np.diff(total_variation_values)) + 1
+    st.write(f'Optimal number of clusters (k): {optimal_k}')
+
+    kmeans = KMeans(n_clusters=optimal_k, random_state=42)
+    slb_data['Cluster'] = kmeans.fit_predict(slb_cluster_data_scaled)
+
+    cluster_centers = pd.DataFrame(scaler.inverse_transform(kmeans.cluster_centers_), columns=features)
+    cluster_centers['Cluster'] = cluster_centers.index + 1
+
+    st.write('\nCluster Centers:')
+    st.write(cluster_centers)
+
+    slb_data['Nearest Cluster Center'] = pairwise_distances_argmin_min(slb_cluster_data_scaled, kmeans.cluster_centers_)[0] + 1
+
+    st.write('\nUpdated SLB Data with Clusters:')
+    st.write(slb_data[['SLB origin time', 'SLB Depth Difference', 'Cluster', 'Nearest Cluster Center']].head())
+
+def perform_clustering(slb_data, k_clusters):
+    slb_data['SLB origin time'] = pd.to_datetime(slb_data['SLB origin time'])
+
+    slb_data['Normalized Time'] = (slb_data['SLB origin time'] - slb_data['SLB origin time'].min()) / (
+                slb_data['SLB origin time'].max() - slb_data['SLB origin time'].min())
+
+    features = ['Normalized Time', 'SLB Horizontal Difference', 'SLB Depth Difference', 'SLB Total Difference']
+
+    scaler = StandardScaler()
+    slb_data_scaled = scaler.fit_transform(slb_data[features])
+
+    kmeans = KMeans(n_clusters=k_clusters, random_state=42)
+    slb_data['Cluster'] = kmeans.fit_predict(slb_data_scaled)
+
+    return slb_data[['SLB origin time', 'Cluster']]
+
+tab_viz, tab_kmeans, tab_tv, tab_normilize = st.tabs(["Data Visualization", "K-Means", "K-Means Optimal", "Normalized"])
+
+with tab_viz:
+    data_visualization_page()
+
+with tab_kmeans:
+    start_date, end_date = get_date_input("tab_kmeans")
+    kmeans_clustering_page(start_date, end_date, "tab_kmeans", k_clusters)
+
+# with tab_wcss:
+#     start_date, end_date = get_date_input("tab_wcss")
+#     slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
+#     kmeans_by_wcss(slb_data_for_clustering)
+
+with tab_tv:
+    start_date, end_date = get_date_input("tab_tv")
+    slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
+    clustering_method = st.selectbox('Choose K-means Optimal Clustering Method', ['Total Variation', 'WCSS'])
+    if clustering_method == "Total Variation":
+        kmeans_by_total_variation(slb_data_for_clustering, k_clusters)
+    if clustering_method == "WCSS":
+        kmeans_by_wcss(slb_data_for_clustering)
+
+with tab_normilize:
+    k_cluster_norm = st.slider("Select Number of Clusters (Normalized)", min_value=2, max_value=20, value=15)
+    slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
+    slb_data = custom_kmeans_clustering(slb_data_for_clustering, k_clusters)
+    st.title('SLB Data Clustering Analysis')
+    clustering_tab = st.selectbox("Choose Analysis", [ "Total Variation",\
+                                                        "WCSS",\
+                                                        "Time and Depth Clustering",\
+                                                        "Depth and Normalized Time Clustering",\
+                                                        "Normalized Time Clustering"
+                                                        ])
+    
+    if clustering_tab == "Total Variation": 
+        st.subheader("Total Variation")
+        normalized_kmeansby_totalVariation(slb_data, k_cluster_norm)
+    
+    if clustering_tab == "WCSS": 
+        st.subheader("WCSS")
+        normalized_kmeansby_totalVariation(slb_data, k_cluster_norm)
+
+
+    if clustering_tab == "Normalized Time Clustering": 
+        st.subheader("Normalized Time Clustering")
+        plot_normalized_time_clustering(slb_data, k_cluster_norm)
+
+    if clustering_tab == "Time and Depth Clustering": 
+        st.subheader("Time and Depth Clustering")
+        plot_time_depth_clustering(slb_data, k_cluster_norm)
+
+    if clustering_tab == "Depth and Normalized Time Clustering": 
+        st.subheader("Depth and Normalized Time Clustering")
+        perform_clustering(slb_data, k_cluster_norm)
+        plot_depth_normalized_time_clustering(slb_data, k_cluster_norm)
