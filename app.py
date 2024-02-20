@@ -46,6 +46,20 @@ def load_relocated_data_with_date_range(start_date, end_date):
 
 def data_visualization_page():
     st.title('Data Visualization')
+
+    st.markdown("""
+    **Note:**
+
+    This page allows you to visualize depth difference data for the selected dataset. 
+
+    * Select the **Start Date** and **End Date** for the visualization period.
+    * Choose the desired type of chart from the available options: Line Chart, Bar Chart, Scatter Plot, or Custom Plotly Scatter Chart.
+    * Pick a dataset from the options on the side.
+
+    **Please note:** 
+    * The available data columns and chart types may vary depending on the selected dataset.
+    * For custom Plotly charts, refer to the documentation for additional customization options.
+    """)
     
     start_date_viz = st.date_input('Start Date Visualization', pd.to_datetime('01/01/2011', format='%d/%m/%Y'))
     end_date_viz = st.date_input('End Date Visualization', pd.to_datetime('31/12/2018', format='%d/%m/%Y'))
@@ -71,6 +85,31 @@ def data_visualization_page():
         st.plotly_chart(plotly_scatter_chart(data, origin_time_col, depth_difference_col, 'Year/Mo. Category'))
 
 def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Difference', 'SLB Horizontal Difference']):
+
+    st.markdown(
+        """
+    Performs K-Means clustering on the provided dataset.
+
+    This function groups similar data points into clusters based on their features. 
+    K-Means clustering is an unsupervised learning technique that aims to partition data 
+    into a predefined number of clusters without any prior knowledge of the labels.
+
+    In this context, we use K-Means clustering to identify groups of seismic line 
+    segments with similar depth and horizontal difference characteristics. This can help 
+    us understand the potential presence of geological formations or patterns within 
+    the seismic data.
+    
+    **Cluster Formats:**
+
+    The list displayed below the plot shows the unique "Year/Mo. Category" formats present within that cluster. This information can help:
+
+    * Identify dominant formations within each cluster.
+    * Investigate potential relationships between formations and cluster characteristics.
+    * Guide further analysis or interpretation of the seismic data.
+    """
+    )
+    st.write("Performing K-Means Clustering on Dataset...")
+
     slb_data['Year/Mo. Category'] = slb_data['Year/Mo. Category'].astype(str)
 
     data_for_clustering = slb_data[features].dropna()
@@ -94,6 +133,13 @@ def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Diffe
                                  mode='markers',
                                  marker=dict(color=custom_colors[cluster_id]),
                                  name=f'Cluster {cluster_id}'))
+        
+    mountain_heights = {'Precambrian': -200, 'Argenta': 0, 'Mt Simon A Lower': 100, 'Mt Simon A Upper': 600, 'Mt Simon B': 800, 'Mt Simon C': 1000}
+    for mountain, height in mountain_heights.items():
+        fig.add_shape(type="line", x0=min(slb_data['SLB Horizontal Difference']), y0=height, x1=max(slb_data['SLB Horizontal Difference']), y1=height,
+                      line=dict(color="red", width=2))
+        fig.add_annotation(text=mountain, xref="x", yref="y", x=max(slb_data['SLB Horizontal Difference']), y=height, showarrow=False, yshift=5, xshift=10)
+
 
     fig.update_layout(title='K-Means Clustering of SLB Data',
                       xaxis_title='SLB Horizontal Difference',
@@ -108,7 +154,6 @@ def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Diffe
 def kmeans_clustering_page(start_date, end_date, tab_name, k_clusters):  
     st.title('K-Means Clustering')
 
-    st.write("Performing K-Means Clustering on SLB Data...")
     slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
     
     perform_kmeans_clustering(slb_data_for_clustering, k_clusters=k_clusters)
@@ -222,6 +267,7 @@ def plot_normalized_time_clustering(slb_data, k_clusters):
     for cluster_id, formats_in_cluster in cluster_formats.items():
         st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
 
+
 def plot_time_depth_clustering(slb_data, k_clusters):
     slb_data['SLB origin time'] = pd.to_datetime(slb_data['SLB origin time'])
     slb_data['TimeInSeconds'] = (slb_data['SLB origin time'] - slb_data['SLB origin time'].min()).dt.total_seconds() + 1
@@ -238,6 +284,12 @@ def plot_time_depth_clustering(slb_data, k_clusters):
                                 text=cluster_data['Year/Mo. Category'],  
                                 hoverinfo='text')) 
     
+    mountain_heights = {'Precambrian': -200, 'Argenta': 0, 'Mt Simon A Lower': 100, 'Mt Simon A Upper': 600, 'Mt Simon B': 800, 'Mt Simon C': 1000}
+    for mountain, height in mountain_heights.items():
+        fig.add_shape(type="line", x0=min(slb_data['TimeInSeconds']), y0=height, x1=max(slb_data['TimeInSeconds']), y1=height,
+                      line=dict(color="red", width=2))
+        fig.add_annotation(text=mountain, xref="x", yref="y", x=max(slb_data['TimeInSeconds']), y=height, showarrow=False, yshift=5, xshift=10)
+
     fig.update_layout(title='K-Means Clustering of SLB Data based on Time and Depth Difference',
                     xaxis_title='Time (Seconds)', yaxis_title='SLB Depth Difference',
                     legend_title='Cluster', showlegend=True,
@@ -248,6 +300,7 @@ def plot_time_depth_clustering(slb_data, k_clusters):
     cluster_formats = slb_data.groupby('Cluster')['Year/Mo. Category'].unique()
     for cluster_id, formats_in_cluster in cluster_formats.items():
         st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
+
 
 def plot_depth_normalized_time_clustering(slb_data, k_clusters):
     fig = go.Figure()
@@ -334,14 +387,17 @@ with tab_kmeans:
     start_date, end_date = get_date_input("tab_kmeans")
     kmeans_clustering_page(start_date, end_date, "tab_kmeans", k_clusters)
 
-# with tab_wcss:
-#     start_date, end_date = get_date_input("tab_wcss")
-#     slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
-#     kmeans_by_wcss(slb_data_for_clustering)
-
 with tab_tv:
     start_date, end_date = get_date_input("tab_tv")
     slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
+    st.title("K-means Optimal")
+    st.markdown(
+        """
+        Determining the optimal number of clusters (k) is crucial for effective K-Means clustering. \
+        This code offers two common methods: Total Variation and WCSS (Within-Cluster Sum of Squares). 
+        
+        Both methods involve calculating a metric that reflects the compactness of clusters for different k values. The optimal k is then chosen at the point where adding more clusters leads to diminishing returns in terms of reducing the metric, visualized as an "elbow curve". Total Variation focuses on the overall spread within clusters, while WCSS measures the sum of squared distances between data points and their cluster centers. Choosing the appropriate method depends on your specific data and the emphasis you want to place on within-cluster variance or distance-based cluster compactness."""
+    )
     clustering_method = st.selectbox('Choose K-means Optimal Clustering Method', ['Total Variation', 'WCSS'])
     if clustering_method == "Total Variation":
         kmeans_by_total_variation(slb_data_for_clustering, k_clusters)
@@ -349,10 +405,21 @@ with tab_tv:
         kmeans_by_wcss(slb_data_for_clustering)
 
 with tab_normilize:
-    k_cluster_norm = st.slider("Select Number of Clusters (Normalized)", min_value=2, max_value=20, value=15)
+   
+    
+    st.title('Data Clustering Analysis')
+    st.markdown(""" 
+        This code section enables interactive exploration of K-Means clustering on seismic line data. Users can specify the desired number of clusters and choose from various analysis methods:
+
+        Total Variation and WCSS: These methods assess cluster compactness through different metrics, visualized as elbow curves, to determine the optimal number of clusters.
+        Time and Depth Clustering: Groups data based on original time and depth features.
+        Depth and Normalized Time/Normalized Time Clustering: Utilize combinations of depth and normalized time for clustering, offering different perspectives on the data.
+        This interactive interface empowers users to experiment with diverse clustering approaches, gaining insights into various data relationships and selecting the most appropriate method for their specific analysis objectives.
+                """)
+    
+    k_cluster_norm = st.slider("Select Number of Clusters (Normalized):", min_value=2, max_value=20, value=15)
     slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
     slb_data = custom_kmeans_clustering(slb_data_for_clustering, k_clusters)
-    st.title('SLB Data Clustering Analysis')
     clustering_tab = st.selectbox("Choose Analysis", [ "Total Variation",\
                                                         "WCSS",\
                                                         "Time and Depth Clustering",\
@@ -366,8 +433,7 @@ with tab_normilize:
     
     if clustering_tab == "WCSS": 
         st.subheader("WCSS")
-        normalized_kmeansby_totalVariation(slb_data, k_cluster_norm)
-
+        kmeans_by_wcss(slb_data_for_clustering)
 
     if clustering_tab == "Normalized Time Clustering": 
         st.subheader("Normalized Time Clustering")
