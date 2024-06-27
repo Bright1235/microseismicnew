@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from sklearn.metrics import pairwise_distances_argmin_min
 from data_loader import load_data
 from plotly_chart import plotly_scatter_chart
@@ -12,7 +12,6 @@ import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 import uuid
 
-
 dataset_key = str(uuid.uuid4())
 tabs_key = str(uuid.uuid4())
 slider_key = str(uuid.uuid4())
@@ -20,7 +19,7 @@ slider_key2 = str(uuid.uuid4())
 
 dataset = st.sidebar.radio("Choose Dataset", ["SLB Data", "Relocated Data"])
 tabs = st.sidebar.radio("Choose Visualization", ["Line Chart", "Bar Chart", "Scatter Plot", "Custom Plotly Scatter Chart"])
-k_clusters = st.sidebar.slider("Select Number of Clusters", min_value=2, max_value=20, value=8)
+k_clusters = st.sidebar.slider("Select Number of Clusters", min_value=1, max_value=20, value=8)
 
 def generate_date_input_key(tab_name, date_type):
     return f"date_input_{tab_name}_{date_type}"
@@ -84,10 +83,12 @@ def data_visualization_page():
     elif tabs == "Custom Plotly Scatter Chart":
         st.plotly_chart(plotly_scatter_chart(data, origin_time_col, depth_difference_col, 'Year/Mo. Category'))
 
-def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Difference', 'SLB Horizontal Difference']):
+    if st.button("Export Selected Data"):
+        csv = data.to_csv(index=False)
+        st.download_button(label="Download CSV", data=csv, file_name='selected_data.csv', mime='text/csv')
 
-    st.markdown(
-        """
+def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Difference', 'SLB Horizontal Difference']):
+    st.markdown("""
     Performs K-Means clustering on the provided dataset.
 
     This function groups similar data points into clusters based on their features. 
@@ -106,8 +107,7 @@ def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Diffe
     * Identify dominant formations within each cluster.
     * Investigate potential relationships between formations and cluster characteristics.
     * Guide further analysis or interpretation of the seismic data.
-    """
-    )
+    """)
     st.write("Performing K-Means Clustering on Dataset...")
 
     slb_data['Year/Mo. Category'] = slb_data['Year/Mo. Category'].astype(str)
@@ -117,10 +117,6 @@ def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Diffe
     kmeans = KMeans(n_clusters=k_clusters, random_state=42)
     slb_data['cluster'] = kmeans.fit_predict(data_for_clustering)
 
-    # custom_colors = ['#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#00FFFF', '#FF00FF', '#800000', '#008000', '#000080', '#808000',
-    #              '#800080', '#008080', '#C0C0C0', '#808080', '#FFA500', '#FF4500', '#A52A2A', '#800000', '#000000', '#FFFFFF'][:k_clusters]
-
-    # we generate a palette of 20 distinct colors since the max range is 20
     palette = sns.color_palette("hsv", 20)
     custom_colors = [sns.color_palette(palette).as_hex()[i] for i in range(20)][:k_clusters]
 
@@ -139,7 +135,6 @@ def perform_kmeans_clustering(slb_data, k_clusters=8, features=['SLB Depth Diffe
         fig.add_shape(type="line", x0=min(slb_data['SLB Horizontal Difference']), y0=height, x1=max(slb_data['SLB Horizontal Difference']), y1=height,
                       line=dict(color="red", width=2))
         fig.add_annotation(text=mountain, xref="x", yref="y", x=max(slb_data['SLB Horizontal Difference']), y=height, showarrow=False, yshift=5, xshift=10)
-
 
     fig.update_layout(title='K-Means Clustering of SLB Data',
                       xaxis_title='SLB Horizontal Difference',
@@ -171,7 +166,8 @@ def kmeans_by_total_variation(slb_data, k_clusters, features=['SLB Depth Differe
         for k in k_values:
             kmeans = KMeans(n_clusters=k, random_state=42)
             kmeans.fit(data)
-            total_variation.append(sum(np.min(pairwise_distances_argmin_min(data, kmeans.cluster_centers_, metric='euclidean'), axis=1)))
+            closest, distances = pairwise_distances_argmin_min(data, kmeans.cluster_centers_)
+            total_variation.append(sum(distances))
         return total_variation
 
     total_variation_values = calculate_total_variation(slb_cluster_data_scaled, k_values)
@@ -267,7 +263,6 @@ def plot_normalized_time_clustering(slb_data, k_clusters):
     for cluster_id, formats_in_cluster in cluster_formats.items():
         st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
 
-
 def plot_time_depth_clustering(slb_data, k_clusters):
     slb_data['SLB origin time'] = pd.to_datetime(slb_data['SLB origin time'])
     slb_data['TimeInSeconds'] = (slb_data['SLB origin time'] - slb_data['SLB origin time'].min()).dt.total_seconds() + 1
@@ -300,7 +295,6 @@ def plot_time_depth_clustering(slb_data, k_clusters):
     cluster_formats = slb_data.groupby('Cluster')['Year/Mo. Category'].unique()
     for cluster_id, formats_in_cluster in cluster_formats.items():
         st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
-
 
 def plot_depth_normalized_time_clustering(slb_data, k_clusters):
     fig = go.Figure()
@@ -336,7 +330,8 @@ def normalized_kmeansby_totalVariation(slb_data, k_clusters):
         for k in k_values:
             kmeans = KMeans(n_clusters=k, random_state=42)
             kmeans.fit(data)
-            total_variation.append(sum(np.min(pairwise_distances_argmin_min(data, kmeans.cluster_centers_, metric='euclidean'), axis=1)))
+            closest, distances = pairwise_distances_argmin_min(data, kmeans.cluster_centers_)
+            total_variation.append(sum(distances))
         return total_variation
 
     k_values = range(1, 21)
@@ -378,7 +373,54 @@ def perform_clustering(slb_data, k_clusters):
 
     return slb_data[['SLB origin time', 'Cluster']]
 
-tab_viz, tab_kmeans, tab_tv, tab_normilize = st.tabs(["Data Visualization", "K-Means", "K-Means Optimal", "Normalized"])
+def perform_dbscan_clustering(slb_data, eps=0.5, min_samples=5, features=['SLB Depth Difference', 'SLB Horizontal Difference']):
+    st.markdown("""
+    Performs DBSCAN clustering on the provided dataset.
+
+    DBSCAN (Density-Based Spatial Clustering of Applications with Noise) is a density-based clustering algorithm 
+    that identifies clusters based on the density of data points. Unlike K-Means, DBSCAN does not require the 
+    number of clusters to be specified beforehand and can find arbitrarily shaped clusters.
+
+    **Parameters:**
+    - eps: The maximum distance between two samples for them to be considered as in the same neighborhood.
+    - min_samples: The number of samples in a neighborhood for a point to be considered as a core point.
+    """)
+    st.write("Performing DBSCAN Clustering on Dataset...")
+
+    slb_data['Year/Mo. Category'] = slb_data['Year/Mo. Category'].astype(str)
+
+    data_for_clustering = slb_data[features].dropna()
+
+    scaler = StandardScaler()
+    data_for_clustering_scaled = scaler.fit_transform(data_for_clustering)
+
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+    slb_data['cluster'] = dbscan.fit_predict(data_for_clustering_scaled)
+
+    unique_clusters = slb_data['cluster'].unique()
+    custom_colors = px.colors.qualitative.Plotly[:len(unique_clusters)]
+
+    fig = go.Figure()
+
+    for cluster_id in unique_clusters:
+        cluster_data = slb_data[slb_data['cluster'] == cluster_id]
+        fig.add_trace(go.Scatter(x=cluster_data['SLB Horizontal Difference'],
+                                 y=cluster_data['SLB Depth Difference'],
+                                 mode='markers',
+                                 marker=dict(color=custom_colors[cluster_id % len(custom_colors)]),
+                                 name=f'Cluster {cluster_id}'))
+
+    fig.update_layout(title='DBSCAN Clustering of SLB Data',
+                      xaxis_title='SLB Horizontal Difference',
+                      yaxis_title='SLB Depth Difference')
+
+    st.plotly_chart(fig)
+    
+    cluster_formats = slb_data.groupby('cluster')['Year/Mo. Category'].unique()
+    for cluster_id, formats_in_cluster in cluster_formats.items():
+        st.write(f"Formats in Cluster {cluster_id}:", formats_in_cluster)
+
+tab_viz, tab_kmeans, tab_dbscan, tab_tv, tab_normalize = st.tabs(["Data Visualization", "K-Means", "DBSCAN", "K-Means Optimal", "Normalized"])
 
 with tab_viz:
     data_visualization_page()
@@ -387,26 +429,31 @@ with tab_kmeans:
     start_date, end_date = get_date_input("tab_kmeans")
     kmeans_clustering_page(start_date, end_date, "tab_kmeans", k_clusters)
 
+with tab_dbscan:
+    st.title('DBSCAN Clustering')
+    eps = st.slider("Select epsilon (eps) value", min_value=0.1, max_value=1.0, step=0.1, value=0.5)
+    min_samples = st.slider("Select min_samples value", min_value=1, max_value=10, step=1, value=5)
+    start_date, end_date = get_date_input("tab_dbscan")
+    slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
+    perform_dbscan_clustering(slb_data_for_clustering, eps=eps, min_samples=min_samples)
+
 with tab_tv:
     start_date, end_date = get_date_input("tab_tv")
     slb_data_for_clustering = load_slb_data_with_date_range(start_date, end_date)
     st.title("K-means Optimal")
-    st.markdown(
-        """
+    st.markdown("""
         Determining the optimal number of clusters (k) is crucial for effective K-Means clustering. \
         This code offers two common methods: Total Variation and WCSS (Within-Cluster Sum of Squares). 
         
-        Both methods involve calculating a metric that reflects the compactness of clusters for different k values. The optimal k is then chosen at the point where adding more clusters leads to diminishing returns in terms of reducing the metric, visualized as an "elbow curve". Total Variation focuses on the overall spread within clusters, while WCSS measures the sum of squared distances between data points and their cluster centers. Choosing the appropriate method depends on your specific data and the emphasis you want to place on within-cluster variance or distance-based cluster compactness."""
-    )
+        Both methods involve calculating a metric that reflects the compactness of clusters for different k values. The optimal k is then chosen at the point where adding more clusters leads to diminishing returns in terms of reducing the metric, visualized as an "elbow curve". Total Variation focuses on the overall spread within clusters, while WCSS measures the sum of squared distances between data points and their cluster centers. Choosing the appropriate method depends on your specific data and the emphasis you want to place on within-cluster variance or distance-based cluster compactness.
+        """)
     clustering_method = st.selectbox('Choose K-means Optimal Clustering Method', ['Total Variation', 'WCSS'])
     if clustering_method == "Total Variation":
         kmeans_by_total_variation(slb_data_for_clustering, k_clusters)
     if clustering_method == "WCSS":
         kmeans_by_wcss(slb_data_for_clustering)
 
-with tab_normilize:
-   
-    
+with tab_normalize:
     st.title('Data Clustering Analysis')
     st.markdown(""" 
         This code section enables interactive exploration of K-Means clustering on seismic line data. Users can specify the desired number of clusters and choose from various analysis methods:
@@ -447,3 +494,4 @@ with tab_normilize:
         st.subheader("Depth and Normalized Time Clustering")
         perform_clustering(slb_data, k_cluster_norm)
         plot_depth_normalized_time_clustering(slb_data, k_cluster_norm)
+
